@@ -46,8 +46,45 @@ func splitCommands(s string) []string {
 	return cmds
 }
 
+func splitArgs(s string) []string {
+	var args []string
+	var cur strings.Builder
+	var quote byte
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else {
+				cur.WriteByte(c)
+			}
+
+		case c == '"' || c == '\'':
+			quote = c
+
+		case c == ' ' || c == '\t':
+			if cur.Len() > 0 {
+				args = append(args, cur.String())
+				cur.Reset()
+			}
+
+		default:
+			cur.WriteByte(c)
+		}
+	}
+
+	if cur.Len() > 0 {
+		args = append(args, cur.String())
+	}
+	return args
+}
+
+
 func runCommand(cmd string) string {
-	fields := strings.Fields(cmd)
+	fields := splitArgs(cmd)
 	if len(fields) == 0 {
 		return ""
 	}
@@ -160,12 +197,42 @@ daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
 					strings.Join(fields[1:], " "),
 				))
 			}
-
 			return bashErr(fmt.Sprintf(
 				"cat: %s: No such file or directory\n",
 				path,
 			))
 		}
+
+	case "w", "who", "last":
+		return "root     pts/0        2024-02-01 12:34 (10.0.0.1)\n"
+
+	case "netstat", "ss":
+		return "Active Internet connections (servers and established)\nProto Recv-Q Send-Q Local Address Foreign Address State\ntcp        0      0 0.0.0.0:22          0.0.0.0:*         LISTEN\n"
+
+	case "find":
+		if len(fields) > 1 && strings.Contains(fields[1], "passwd") {
+			return "/etc/passwd\n"
+		}
+		return ".\n"
+
+	case "grep":
+		if len(fields) > 2 && fields[2] == "/etc/passwd" {
+			return "root:x:0:0:root:/root:/bin/bash\n"
+		}
+		return ""
+
+	case "python", "python3", "perl", "php":
+		return "Python 3.11.2 (main, Feb  1 2024, 00:00:00) [GCC 13.2.1]\n"
+
+	case "env", "printenv":
+		return `USER=root
+HOME=/root
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+SHELL=/bin/bash
+PWD=/root
+TERM=xterm-256color
+`
+
 
 	case "exit", "logout":
 		return "logout\n"
@@ -205,6 +272,7 @@ func handleEcho(args []string) string {
 
 func unescape(s string) string {
 	var out strings.Builder
+
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\\' && i+1 < len(s) {
 			i++
@@ -217,6 +285,21 @@ func unescape(s string) string {
 				out.WriteByte('\t')
 			case '\\':
 				out.WriteByte('\\')
+
+			case 'x':
+				// hex escape: \xNN
+				if i+2 < len(s) {
+					hex := s[i+1 : i+3]
+					if v, err := parseHexByte(hex); err == nil {
+						out.WriteByte(v)
+						i += 2
+					} else {
+						out.WriteString(`\x`)
+					}
+				} else {
+					out.WriteString(`\x`)
+				}
+
 			default:
 				out.WriteByte('\\')
 				out.WriteByte(s[i])
@@ -225,5 +308,24 @@ func unescape(s string) string {
 			out.WriteByte(s[i])
 		}
 	}
+
 	return out.String()
+}
+
+func parseHexByte(s string) (byte, error) {
+	var v byte
+	for i := 0; i < 2; i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9':
+			v = v<<4 | (c - '0')
+		case c >= 'a' && c <= 'f':
+			v = v<<4 | (c - 'a' + 10)
+		case c >= 'A' && c <= 'F':
+			v = v<<4 | (c - 'A' + 10)
+		default:
+			return 0, fmt.Errorf("invalid hex")
+		}
+	}
+	return v, nil
 }
