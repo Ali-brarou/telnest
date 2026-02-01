@@ -36,6 +36,11 @@ func (s *Server) ListenAndServe() error {
 	}
 }
 
+func checkCVE_2026_24061(tel *TelnetConn) bool {
+	_, ok := tel.Env["USER"]
+	return ok
+}
+
 func (s *Server) handle(c net.Conn) {
 	defer func() {
 		log.Printf("[%s] disconnected\n", c.RemoteAddr())
@@ -51,8 +56,7 @@ func (s *Server) handle(c net.Conn) {
 
 	/* if the attacker put a USER env then skip auth */
 	authed := false
-	_, ok := tel.Env["USER"]
-	if ok {
+	if checkCVE_2026_24061(tel) {
 		authed = true
 		log.Printf(
 			"[%s] TELNET CVE-2026-24061 exploited",
@@ -81,6 +85,14 @@ func (s *Server) handle(c net.Conn) {
 			return
 		}
 
+		if checkCVE_2026_24061(tel) {
+			log.Printf(
+				"[%s] TELNET CVE-2026-24061 exploited",
+				c.RemoteAddr(),
+			)
+			break
+		}
+
 		// hide password client side
 		tel.WriteIAC(WILL, ECHO)
 		// send password prompt
@@ -101,11 +113,19 @@ func (s *Server) handle(c net.Conn) {
 			"[%s] TELNET auth attempt user=%q pass=%q env=%v",
 			c.RemoteAddr(),
 			user,
-			pass, 
+			pass,
 			tel.Env,
 		)
 
-		if user == "root" && pass == "admin" {
+		if checkCVE_2026_24061(tel) {
+			log.Printf(
+				"[%s] TELNET CVE-2026-24061 exploited",
+				c.RemoteAddr(),
+			)
+			break
+		}
+
+		if user == "root" && pass == "1234" {
 			break
 		} else {
 			time.Sleep(2 * time.Second)
@@ -114,9 +134,9 @@ func (s *Server) handle(c net.Conn) {
 		}
 	}
 
-	log.Printf("[%s] got a shell\n", c.RemoteAddr())	
+	log.Printf("[%s] got a shell\n", c.RemoteAddr())
 
-	prompt := fmt.Sprintf("[%s@ab-device ~]# ", user) 
+	prompt := fmt.Sprintf("[%s@ab-device ~]# ", user)
 	for {
 		rw.WriteString(prompt)
 		rw.Flush()

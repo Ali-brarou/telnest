@@ -1,4 +1,6 @@
-- cmd handling is a little messy 
+- telnet cmd handling is a little messy 
 - no max clients
 - improve fake shell
 - if environ was received after the delay at the beginning fo the connection the exploit will not be detected
+- easier configuration to the honeypot
+- allow multiple ports
