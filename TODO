@@ -1,6 +1,5 @@
-- telnet cmd handling is a little messy 
-- no max clients
-- improve fake shell
-- if environ was received after the delay at the beginning fo the connection the exploit will not be detected
-- easier configuration to the honeypot
-- allow multiple ports
+- Telnet command handling is a bit messy
+- No limit on maximum number of clients
+- If environment variables are received after the initial connection delay, the exploit will not be detected
+- Easier honeypot configuration
+- Support multiple listening ports
