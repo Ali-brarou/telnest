@@ -1,10 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"net"
-	"time"
+	"sync"
 )
 
 // https://www.rfc-editor.org/rfc/rfc854
@@ -20,133 +21,207 @@ const (
 	ECHO = 1
 )
 
-type TelnetReader struct {
-	r   io.Reader
+type TelnetConn struct {
+	c   net.Conn
 	Env map[string]string
 
-	state   int
-	sb      bytes.Buffer
-	pending *byte
+	dataCh  chan byte
+	errCh   chan error
+	closeCh chan struct{}
+
+	writeMu sync.Mutex
 }
 
-const (
-	stNormal = iota
-	stIAC
-	stIAC_IGNORE
-	stSB
-	stSB_IAC
-)
-
-func NewTelnetReader(r io.Reader) *TelnetReader {
-	return &TelnetReader{
+func NewTelnetConn(c net.Conn) *TelnetConn {
+	t := &TelnetConn{
 		Env: make(map[string]string),
-		r:   r,
+
+		c:       c,
+		dataCh:  make(chan byte, 4096),
+		errCh:   make(chan error, 1),
+		closeCh: make(chan struct{}),
+	}
+
+	go t.parseLoop()
+	return t
+}
+
+func (t *TelnetConn) handleCmd(cmd, opt byte) {
+	switch cmd {
+	case DO:
+		if opt == NEW_ENVIRON || opt == ECHO {
+			t.WriteIAC(WILL, opt) // agree to send ENV
+		} else {
+			t.WriteIAC(WONT, opt)
+		}
+	case DONT:
+		t.WriteIAC(WONT, opt)
+	case WILL:
+		if opt == NEW_ENVIRON || opt == ECHO {
+			t.WriteIAC(DO, opt) // agree to receive ENV
+		} else {
+			t.WriteIAC(DONT, opt)
+		}
+	case WONT:
+		t.WriteIAC(DONT, opt)
 	}
 }
 
-func (t *TelnetReader) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
+func (t *TelnetConn) parseLoop() {
+	r := bufio.NewReader(t.c)
+	sb := new(bytes.Buffer)
+	cmd := byte(0)
+	const (
+		stNormal = iota
+		stIAC
+		stIACIgnore
+		stIACCmd
+		stSB
+		stSB_IAC
+	)
+	state := stNormal
 
-	if t.pending != nil {
-		p[0] = *t.pending
-		t.pending = nil
-		return 1, nil
-	}
-
-	buf := []byte{0}
-	// Read byte by byte
 	for {
-		_, err := t.r.Read(buf)
+		b, err := r.ReadByte()
 		if err != nil {
-			return 0, err
+			select {
+			case t.errCh <- err:
+			default:
+			}
+			close(t.dataCh)
+			return
 		}
-		b := buf[0]
 
-		switch t.state {
+		switch state {
 		case stNormal:
 			// IAC telnet command
 			if b == IAC {
-				t.state = stIAC
+				state = stIAC
 				continue
 			}
-			p[0] = b
-			return 1, nil
+			select {
+			case t.dataCh <- b:
+			case <-t.closeCh:
+				return
+			}
 
 		case stIAC:
 			switch b {
 			// IAC escaped
 			case IAC:
-				t.state = stNormal
-				p[0] = IAC
-				return 1, nil
+				state = stNormal
+				select {
+				case t.dataCh <- IAC:
+				case <-t.closeCh:
+					return
+				}
 
 			// start recording in sb buffer
 			case SB:
-				t.sb.Reset()
-				t.state = stSB
+				sb.Reset()
+				state = stSB
 
 			case WILL, WONT, DO, DONT:
-				t.state = stIAC_IGNORE
+				cmd = b
+				state = stIACCmd
 
 			// ignore other then sb
 			default:
-				t.state = stNormal
+				state = stNormal
 			}
 
-		case stIAC_IGNORE:
-			t.state = stNormal
+		case stIACIgnore:
+			state = stNormal
+
+		case stIACCmd:
+			t.handleCmd(cmd, b)
+			state = stNormal
 
 		case stSB:
 			if b == IAC {
-				t.state = stSB_IAC
+				state = stSB_IAC
 				continue
 			}
-			t.sb.WriteByte(b)
+			sb.WriteByte(b)
 
 		case stSB_IAC:
 			switch b {
 			case SE:
-				parseEnv(t.sb.Bytes(), t.Env)
-				t.state = stNormal
+				parseEnv(sb.Bytes(), t.Env)
+				state = stNormal
 
 			case IAC:
-				t.sb.WriteByte(IAC)
-				t.state = stSB
+				sb.WriteByte(IAC)
+				state = stSB
 
 			default:
-				t.sb.WriteByte(IAC)
-				t.sb.WriteByte(b)
-				t.state = stSB
+				sb.WriteByte(IAC)
+				sb.WriteByte(b)
+				state = stSB
 
 			}
 		}
 	}
-	return 0, nil
+
 }
 
-func (t *TelnetReader) Prime(c net.Conn, timeout time.Duration) error {
-	if t.pending != nil {
-		return nil
-	}
-
-	c.SetReadDeadline(time.Now().Add(timeout))
-	buf := []byte{0}
-	n, err := t.Read(buf)
-
-	if err != nil {
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return nil
+func (t *TelnetConn) Read(p []byte) (int, error) {
+	i := 0
+	for i < len(p) {
+		select {
+		case b, ok := <-t.dataCh:
+			if !ok {
+				select {
+				case err := <-t.errCh:
+					if i == 0 {
+						return 0, err
+					}
+					return i, nil
+				default:
+					if i == 0 {
+						return 0, io.EOF
+					}
+					return i, nil
+				}
+			}
+			p[i] = b
+			i++
+			if i > 0 {
+				return i, nil
+			}
+		case <-t.closeCh:
+			return 0, io.EOF
 		}
+	}
+	return i, nil
+}
 
-		return err
+func (t *TelnetConn) writeRaw(p []byte) (int, error) {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+	n, err := t.c.Write(p)
+	return n, err
+}
+
+func (t *TelnetConn) Write(p []byte) (int, error) {
+	escaped := make([]byte, 0, len(p)+4)
+	for _, bb := range p {
+		escaped = append(escaped, bb)
+		if bb == IAC {
+			escaped = append(escaped, bb)
+		}
 	}
 
-	if n == 1 {
-		b := buf[0]
-		t.pending = &b
+	// TODO: calculate the correct size on error
+	_, err := t.writeRaw(escaped)
+	if err != nil {
+		return 0, err
 	}
 
-	return nil
+	return len(p), nil
+}
+
+func (t *TelnetConn) WriteIAC(cmd, opt byte) error {
+	_, err := t.writeRaw([]byte{IAC, cmd, opt})
+	return err
 }

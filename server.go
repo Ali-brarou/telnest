@@ -44,19 +44,16 @@ func (s *Server) handle(c net.Conn) {
 
 	log.Printf("[%s] connected", c.RemoteAddr())
 
-	tr := NewTelnetReader(c)
+	tel := NewTelnetConn(c)
+	tel.WriteIAC(DO, NEW_ENVIRON)
+	/* sleep a little bit to detect early negotiations */
+	time.Sleep(300 * time.Millisecond)
 
-	// try to capture the first byte sent by the client.
-	// so early negotiations (NEW-ENV) are processed
-	err := tr.Prime(c, time.Second)
-	if err != nil {
-		return
-	}
 	/* if the attacker put a USER env then skip auth */
-	skipAuth := false
-	_, ok := tr.Env["USER"]
+	authed := false
+	_, ok := tel.Env["USER"]
 	if ok {
-		skipAuth = true
+		authed = true
 		log.Printf(
 			"[%s] TELNET CVE-2026-24061 exploited",
 			c.RemoteAddr(),
@@ -64,8 +61,8 @@ func (s *Server) handle(c net.Conn) {
 	}
 
 	rw := bufio.NewReadWriter(
-		bufio.NewReader(tr),
-		bufio.NewWriter(c),
+		bufio.NewReader(tel),
+		bufio.NewWriter(tel),
 	)
 
 	// send the banner
@@ -73,40 +70,53 @@ func (s *Server) handle(c net.Conn) {
 	rw.Flush()
 
 	user := "root"
-	if !skipAuth {
+	for !authed {
 		// send login prompt
 		rw.WriteString("ab-device login: ")
 		rw.Flush()
-		c.SetDeadline(time.Now().Add(30 * time.Second))
-		user, err = rw.ReadString('\n')
+		c.SetDeadline(time.Now().Add(60 * time.Second))
+		user, err := rw.ReadString('\n')
+		user = strings.TrimSpace(user)
 		if err != nil {
 			return
 		}
 
 		// hide password client side
-		rw.Write([]byte{IAC, WILL, ECHO})
+		tel.WriteIAC(WILL, ECHO)
 		// send password prompt
 		rw.WriteString("Password : ")
 		rw.Flush()
-		c.SetDeadline(time.Now().Add(30 * time.Second))
+		c.SetDeadline(time.Now().Add(60 * time.Second))
 		pass, err := rw.ReadString('\n')
+		pass = strings.TrimSpace(pass)
 		if err != nil {
 			return
 		}
 		// show text client side
-		rw.Write([]byte{IAC, WONT, ECHO, 0xa})
+		tel.WriteIAC(WONT, ECHO)
+		rw.WriteString("\n")
 		rw.Flush()
 
 		log.Printf(
 			"[%s] TELNET auth attempt user=%q pass=%q env=%v",
 			c.RemoteAddr(),
-			strings.TrimSpace(user),
-			strings.TrimSpace(pass),
-			tr.Env,
+			user,
+			pass, 
+			tel.Env,
 		)
+
+		if user == "root" && pass == "admin" {
+			break
+		} else {
+			time.Sleep(2 * time.Second)
+			rw.WriteString("\r\nLogin incorrect\r\n")
+			rw.Flush()
+		}
 	}
 
-	prompt := fmt.Sprintf("[%s@ab-device ~]# ", strings.TrimSpace(user))
+	log.Printf("[%s] got a shell\n", c.RemoteAddr())	
+
+	prompt := fmt.Sprintf("[%s@ab-device ~]# ", user) 
 	for {
 		rw.WriteString(prompt)
 		rw.Flush()
@@ -121,10 +131,4 @@ func (s *Server) handle(c net.Conn) {
 		rw.WriteString(fakeShell(cmd))
 		rw.Flush()
 	}
-
-	/*
-		time.Sleep(2 * time.Second)
-		rw.WriteString("\r\nLogin incorrect\r\n")
-		rw.Flush()
-	*/
 }

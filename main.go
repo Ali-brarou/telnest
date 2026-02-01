@@ -8,7 +8,8 @@ import (
 )
 
 func main() {
-	logFile, err := os.OpenFile("telnet.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	logFileName := "telnest.log"
+	logFile, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -17,6 +18,7 @@ func main() {
 
 	multi := io.MultiWriter(os.Stdout, logFile)
 	log.SetOutput(multi)
+	fmt.Println("logging to file:", logFileName)
 
 	Server := NewServer(":2323")
 	err = Server.ListenAndServe()

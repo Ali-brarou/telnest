@@ -10,14 +10,14 @@ const (
 	USERVAR     = 3
 )
 
-const (
-	stNone = iota
-	stName
-	stValue
-	stEsc
-)
-
 func parseEnv(b []byte, env map[string]string) {
+	const (
+		stNone = iota
+		stName
+		stValue
+		stEsc
+	)
+
 	if len(b) <= 2 || b[0] != NEW_ENVIRON || b[1] != IS {
 		return
 	}
