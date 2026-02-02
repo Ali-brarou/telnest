@@ -5,6 +5,49 @@ import (
 	"strings"
 )
 
+var busyboxHelp = `BusyBox v1.17.2 (2018-04-09 12:28:55 CST) multi-call binary.
+Copyright (C) 1998-2009 Erik Andersen, Rob Landley, Denys Vlasenko
+and others. Licensed under GPLv2.
+See source distribution for full notice.
+
+Usage: busybox [function] [arguments]...
+   or: function [arguments]...
+
+        BusyBox is a multi-call binary that combines many common Unix
+        utilities into a single executable.  Most people will create a
+        link to busybox for each function they wish to use and BusyBox
+        will act like whatever it was invoked as.
+
+Currently defined functions:
+        [, [[, ash, bash, cat, chmod, chrt, cp, date, deluser, depmod, df,
+        dmesg, echo, ether-wake, expr, false, find, flash_eraseall, ftpget,
+        grep, halt, ifconfig, init, insmod, kill, killall, klogd, linuxrc, ln,
+        logger, logread, ls, mkdir, mknod, modprobe, mount, nc, nslookup, ping,
+        ping6, poweroff, ps, pwd, reboot, renice, rm, rmmod, route, sendarp,
+        sh, sleep, stty, sysinfo, syslogd, taskset, test, tftp, tftpd, top,
+        traceroute, traceroute6, true, tty, umount, vconfig, wget
+`
+
+var busyboxApplets = map[string]bool{
+	"[": true, "[[": true, "ash": true, "bash": true, "cat": true, "chmod": true,
+	"chrt": true, "cp": true, "date": true, "deluser": true, "depmod": true,
+	"df": true, "dmesg": true, "echo": true, "ether-wake": true, "expr": true,
+	"false": true, "find": true, "flash_eraseall": true, "ftpget": true,
+	"ftpput": true, "halt": true, "ifconfig": true, "init": true,
+	"insmod": true, "kill": true, "killall": true, "klogd": true, "linuxrc": true,
+	"ln": true, "logger": true, "logread": true, "ls": true, "mkdir": true,
+	"mknod": true, "modprobe": true, "mount": true, "nc": true, "netcat": true,
+	"nslookup": true, "ping": true, "ping6": true, "poweroff": true, "ps": true,
+	"pwd": true, "reboot": true, "renice": true, "rm": true, "rmmod": true,
+	"route": true, "sendarp": true, "sh": true, "sleep": true, "stty": true,
+	"sysinfo": true, "syslogd": true, "taskset": true, "test": true, "tftp": true,
+	"tftpd": true, "top": true, "traceroute": true, "traceroute6": true,
+	"true": true, "tty": true, "umount": true, "vconfig": true, "wget": true,
+	"python": true, "python3": true, "perl": true, "php": true, "env": true,
+	"printenv": true, "busybox": true, "/bin/busybox": true, "who": true, "w": true, "last": true,
+	"ss": true, "netstat": true, "grep": true, "hostname": true,
+}
+
 func fakeShell(input string) string {
 	input = strings.TrimSpace(input)
 	if input == "" {
@@ -88,6 +131,21 @@ func runCommand(cmd string) string {
 		return ""
 	}
 
+	if fields[0] == "busybox" || fields[0] == "/bin/busybox" {
+		if len(fields) == 1 {
+			return busyboxHelp
+		}
+		if fields[1] == "--help" || fields[1] == "-h" {
+			return busyboxHelp
+		}
+		applet := fields[1]
+		args := ""
+		if len(fields) > 2 {
+			args = " " + strings.Join(fields[2:], " ")
+		}
+		return runCommand(applet + args)
+	}
+
 	switch fields[0] {
 	case "echo":
 		return handleEcho(fields[1:])
@@ -144,29 +202,10 @@ func runCommand(cmd string) string {
 		return ""
 
 	case "/bin/busybox", "busybox":
-		return `BusyBox v1.17.2 (2018-04-09 12:28:55 CST) multi-call binary.
-Copyright (C) 1998-2009 Erik Andersen, Rob Landley, Denys Vlasenko
-and others. Licensed under GPLv2.
-See source distribution for full notice.
+		return busyboxHelp
 
-Usage: busybox [function] [arguments]...
-   or: function [arguments]...
-
-        BusyBox is a multi-call binary that combines many common Unix
-        utilities into a single executable.  Most people will create a
-        link to busybox for each function they wish to use and BusyBox
-        will act like whatever it was invoked as.
-
-Currently defined functions:
-        [, [[, ash, bash, cat, chmod, chrt, cp, date, deluser, depmod, df,
-        dmesg, echo, ether-wake, expr, false, find, flash_eraseall, ftpget,
-        grep, halt, ifconfig, init, insmod, kill, killall, klogd, linuxrc, ln,
-        logger, logread, ls, mkdir, mknod, modprobe, mount, nc, nslookup, ping,
-        ping6, poweroff, ps, pwd, reboot, renice, rm, rmmod, route, sendarp,
-        sh, sleep, stty, sysinfo, syslogd, taskset, test, tftp, tftpd, top,
-        traceroute, traceroute6, true, tty, umount, vconfig, wget
-
-`
+	case "busybox:list":
+		return busyboxHelp
 
 	case "ping":
 		if len(fields) < 2 {
@@ -229,7 +268,6 @@ daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
 			return "Linux version 6.17.9-arch1-1 (gcc version 13.2.1)\n"
 
 		default:
-			// handle multiple files: cat a b c
 			if len(fields) > 2 {
 				return bashErr(fmt.Sprintf(
 					"cat: %s: No such file or directory\n",
@@ -276,6 +314,9 @@ TERM=xterm-256color
 		return "logout\n"
 
 	default:
+		if _, isApplet := busyboxApplets[fields[0]]; isApplet {
+			return fmt.Sprintf("busybox: applet not found: %s\n", fields[0])
+		}
 		return bashErr(fmt.Sprintf("%s: command not found\n", fields[0]))
 	}
 }
@@ -295,24 +336,29 @@ func handleEcho(args []string) string {
 			break
 		}
 
-		for _, c := range args[i][1:] {
+		flags := args[i][1:]
+		allFlagsConsumed := true
+		for _, c := range flags {
 			switch c {
 			case 'e':
 				interpretEscapes = true
 			case 'n':
 				noNewline = true
 			default:
-				goto doneFlags
+				allFlagsConsumed = false
+				break
 			}
+		}
+		if !allFlagsConsumed {
+			break
 		}
 		i++
 	}
-doneFlags:
 
 	clean := make([]string, 0, len(args[i:]))
 	for _, a := range args[i:] {
 		if strings.HasPrefix(a, ">") || strings.Contains(a, "/dev/null") {
-			break
+			return ""
 		}
 		clean = append(clean, a)
 	}

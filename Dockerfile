@@ -21,6 +21,8 @@ COPY --from=builder /usr/local/bin/telnest /usr/local/bin/telnest
 USER telnest
 WORKDIR /home/telnest
 
+EXPOSE 23/tcp
 EXPOSE 2323/tcp
+EXPOSE 4000/tcp
 
 CMD ["/usr/local/bin/telnest"]

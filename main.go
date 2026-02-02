@@ -20,9 +20,22 @@ func main() {
 	log.SetOutput(multi)
 	fmt.Println("logging to file:", logFileName)
 
-	server := NewServer(":2323")
-	err = server.ListenAndServe()
-	if err != nil {
-		fmt.Println(err)
+	// https://www.shodan.io/search?query=telnet
+	ports := []string{
+		":23",
+		":2323",
+		":4000",
 	}
+
+	for _, addr := range ports {
+		server := NewServer(addr)
+
+		go func(s *Server) {
+			if err = server.ListenAndServe(); err != nil {
+				log.Println("listen error:", err)
+			}
+		}(server)
+	}
+
+	select {}
 }
