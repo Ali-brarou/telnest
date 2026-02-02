@@ -4,6 +4,7 @@ package main
 const (
 	NEW_ENVIRON = 39
 	IS          = 0
+	SEND        = 1
 	VAR         = 0
 	VALUE       = 1
 	ESC         = 2

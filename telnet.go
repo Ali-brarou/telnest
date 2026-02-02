@@ -46,6 +46,13 @@ func NewTelnetConn(c net.Conn) *TelnetConn {
 	return t
 }
 
+func (t *TelnetConn) requestEnv() {
+	var telnetEnvSend = []byte{
+		IAC, SB, NEW_ENVIRON, SEND, IAC, SE,
+	}
+	t.writeRaw(telnetEnvSend)
+}
+
 func (t *TelnetConn) handleCmd(cmd, opt byte) {
 	switch cmd {
 	case DO:
@@ -57,8 +64,11 @@ func (t *TelnetConn) handleCmd(cmd, opt byte) {
 	case DONT:
 		t.WriteIAC(WONT, opt)
 	case WILL:
-		if opt == NEW_ENVIRON || opt == ECHO {
+		if opt == NEW_ENVIRON {
 			t.WriteIAC(DO, opt) // agree to receive ENV
+			t.requestEnv()
+		} else if opt == ECHO {
+			t.WriteIAC(DO, opt)
 		} else {
 			t.WriteIAC(DONT, opt)
 		}
