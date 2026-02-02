@@ -82,7 +82,6 @@ func splitArgs(s string) []string {
 	return args
 }
 
-
 func runCommand(cmd string) string {
 	fields := splitArgs(cmd)
 	if len(fields) == 0 {
@@ -145,11 +144,51 @@ func runCommand(cmd string) string {
 		return ""
 
 	case "/bin/busybox", "busybox":
-		return "BusyBox v1.36.1 (built-in shell)\n"
+		return `BusyBox v1.17.2 (2018-04-09 12:28:55 CST) multi-call binary.
+Copyright (C) 1998-2009 Erik Andersen, Rob Landley, Denys Vlasenko
+and others. Licensed under GPLv2.
+See source distribution for full notice.
+
+Usage: busybox [function] [arguments]...
+   or: function [arguments]...
+
+        BusyBox is a multi-call binary that combines many common Unix
+        utilities into a single executable.  Most people will create a
+        link to busybox for each function they wish to use and BusyBox
+        will act like whatever it was invoked as.
+
+Currently defined functions:
+        [, [[, ash, bash, cat, chmod, chrt, cp, date, deluser, depmod, df,
+        dmesg, echo, ether-wake, expr, false, find, flash_eraseall, ftpget,
+        grep, halt, ifconfig, init, insmod, kill, killall, klogd, linuxrc, ln,
+        logger, logread, ls, mkdir, mknod, modprobe, mount, nc, nslookup, ping,
+        ping6, poweroff, ps, pwd, reboot, renice, rm, rmmod, route, sendarp,
+        sh, sleep, stty, sysinfo, syslogd, taskset, test, tftp, tftpd, top,
+        traceroute, traceroute6, true, tty, umount, vconfig, wget
+
+`
 
 	case "ping":
 		if len(fields) < 2 {
-			return bashErr("ping: missing host operand\n")
+			return `BusyBox v1.17.2 (2018-04-09 12:28:55 CST) multi-call binary.
+
+Usage: ping [OPTIONS] HOST
+
+Send ICMP ECHO_REQUEST packets to network hosts
+
+Options:
+	-4, -6          Force IP or IPv6 name resolution
+	-c CNT          Send only CNT pings
+	-s SIZE         Send SIZE data bytes in packets (default:56)
+	-I IFACE/IP     Use interface or IP address as source
+	-W SEC          Seconds to wait for the first response (default:10)
+					(after all -c CNT packets are sent)
+	-w SEC          Seconds until ping exits (default:infinite)
+					(can exit earlier with -c CNT)
+	-q             	Quiet, only displays output at start
+					and when finished
+
+`
 		}
 		host := fields[1]
 		return fmt.Sprintf(
@@ -233,7 +272,6 @@ PWD=/root
 TERM=xterm-256color
 `
 
-
 	case "exit", "logout":
 		return "logout\n"
 
@@ -248,15 +286,31 @@ func bashErr(s string) string {
 
 func handleEcho(args []string) string {
 	interpretEscapes := false
-	start := 0
+	noNewline := false
 
-	if len(args) > 0 && args[0] == "-e" {
-		interpretEscapes = true
-		start = 1
+	i := 0
+	for i < len(args) && strings.HasPrefix(args[i], "-") && len(args[i]) > 1 {
+		if args[i] == "--" {
+			i++
+			break
+		}
+
+		for _, c := range args[i][1:] {
+			switch c {
+			case 'e':
+				interpretEscapes = true
+			case 'n':
+				noNewline = true
+			default:
+				goto doneFlags
+			}
+		}
+		i++
 	}
+doneFlags:
 
-	clean := make([]string, 0, len(args[start:]))
-	for _, a := range args[start:] {
+	clean := make([]string, 0, len(args[i:]))
+	for _, a := range args[i:] {
 		if strings.HasPrefix(a, ">") || strings.Contains(a, "/dev/null") {
 			break
 		}
@@ -266,6 +320,10 @@ func handleEcho(args []string) string {
 	text := strings.Join(clean, " ")
 	if interpretEscapes {
 		text = unescape(text)
+	}
+
+	if noNewline {
+		return text
 	}
 	return text + "\n"
 }
