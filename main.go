@@ -20,8 +20,8 @@ func main() {
 	log.SetOutput(multi)
 	fmt.Println("logging to file:", logFileName)
 
-	Server := NewServer(":2323")
-	err = Server.ListenAndServe()
+	server := NewServer(":2323")
+	err = server.ListenAndServe()
 	if err != nil {
 		fmt.Println(err)
 	}
