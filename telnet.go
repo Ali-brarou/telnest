@@ -176,31 +176,43 @@ func (t *TelnetConn) parseLoop() {
 }
 
 func (t *TelnetConn) Read(p []byte) (int, error) {
-	i := 0
+	if len(p) == 0 {
+		return 0, nil
+	}
+	/* block on first byte */
+	var b byte
+	var ok bool
+	select {
+	case b, ok = <-t.dataCh:
+		if !ok {
+			select {
+			case err := <-t.errCh:
+				return 0, err
+			default:
+				return 0, io.EOF
+			}
+		}
+	case <-t.closeCh:
+		return 0, io.EOF
+	}
+	p[0] = b
+	i := 1
+	/* read more if possible */
 	for i < len(p) {
 		select {
 		case b, ok := <-t.dataCh:
 			if !ok {
 				select {
 				case err := <-t.errCh:
-					if i == 0 {
-						return 0, err
-					}
-					return i, nil
+					return i, err
 				default:
-					if i == 0 {
-						return 0, io.EOF
-					}
-					return i, nil
+					return i, io.EOF
 				}
 			}
 			p[i] = b
 			i++
-			if i > 0 {
-				return i, nil
-			}
-		case <-t.closeCh:
-			return 0, io.EOF
+		default:
+			return i, nil
 		}
 	}
 	return i, nil
